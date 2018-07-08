@@ -1,0 +1,130 @@
+== bean
+=== 实体类
+* 必须implements TableEntity/TableCreatable, 这些接口定义了主键, 创建者, 创建时间, 更新者, 更新时间
+* 某个实体类具有特定的行为，直接在该实体上新增方法即可，比如在FileInfo实体上增加getUrl()方法
+=== DTO
+* 与前端交互中, 实体类不能满足前端需求时, 新建DTO类与前端进行数据交互.
+* DTO类至少需对service层可见, 尽量对dao层可见
+* DTO类严禁继承自实体类, 此时会暴露不必要的字段, 不利于swagger等集成文档, 也不利于hibernate-validator验证
+* DTO类与实体类通过BeanUtil.copyProperties拷贝同名同类型字段, 其余字段手动处理, 方便重构
+
+== dao(对mybatis指mapper)
+* 采用baomidou的mybatis_plus封装, 支持热刷新mapper.xml
+* 无需再拆分为两层:dao -> mapper. 如需mapper中无法直接查询的结果时, 直接在mapper中增加default方法, 如:
+[source,java]
+UserMapper{
+    long countById(Integer id);
+    default boolean existsById(Integer id) {
+        return countById(id) > 0;
+    }
+}
+* dao层复杂查询无对应实体类时, 如可通过返回类字段按字段名或字段名转下划线直接映射时, 无需定义resultMap, 留给mybatis自动处理
+* 简单sql可在mapper方法上用注解标注, 无需写入到xml
+* 分页禁止手写countSql, 再写pageSql, 采用分页插件处理. 如可只分页而不count时, 不要count, mysql count查询总是相当的慢
+
+== service
+* 继承baseService, 自带对应mapper的默认方法, 如insert, insertSelective, update, updateSelective...
+* serviceA需增删改实体类B时, 因增删改往往会涉及一些前置处理, 请注入serviceB, 调用serviceB的增删改方法, 而不是daoB/mapperB的增删改方法
+* serviceA需查询实体类B时, 直接注入daoB/mapperB处理, 原因有二:
+** 可按需查询所需字段, 减少service方法书写
+** 降低service查询耦合, 由于service查询方法一般是为某个页面或api服务，不具有一般性，避免调用service查询时带出许多不必要的查询
+
+== controller
+* 入参传值, 可直接用实体类或DTO类进行接收, DTO类可直接传递到service层
+* 参数验证采用hibernate-validator注解验证.
+尽量避免使用hibernate-validator的分组功能, 这会引入不必要的空类, 并使验证复杂难读, 也可绕开验证
+[source,java]
+// 错误
+class User{
+    @NotNull(groups = UserUpdate.class)
+    @Null(groups = UserCreate.class)
+    Integer id;
+}
+class UserController{
+    void create(@Validated(UserCreate.class) UserUpdateDTO u){}
+    void update(@Validated(UserUpdate.class) UserCreateDTO c){}
+}
+// 正确
+class User{
+    @NotNull
+    Integer id;
+}
+class UserController{
+    void create(UserUpdateDTO u) {
+        u.id = null;
+    }
+    void update(@Validated UserCreateDTO c){}
+}
+// 正确
+class User{
+    Integer id;
+}
+class UserController{
+    void create(UserUpdateDTO u) {
+        u.id = null;
+    }
+    @PostMapping("/{id}")
+    void update(@PathVariable Integer id, UserCreateDTO c){
+        c.id = id;
+    }
+}
+
+== 异常
+* 绝大部分情况无需区分异常类型, 无脑抛出BusinessException即可
+* 如事物可控, 也可采用ExceptionUtil.unsafe(Throwable)包装受检异常抛出, 具体参看ExceptionUtil.unsafe(Throwable)文档
+* 确有需要区分异常类型, 继承BusinessException. 禁止通过抛出异常进行分支跳转, 此种情况请通过返回值来控制, 如返回:
+[source,java]
+Pair<Integer, String> calculateFee(Order order) {
+    if(...) {
+        return Pair.of(null, "branch_a");
+    } else if(...) {
+        return Pair.of(null, "branch_b);
+    }
+    // ...
+    return Pair.of(fee, null);
+}
+
+== 事物
+* spring默认事物回滚规则为了兼容EJB, 只回滚RuntimeException和Error, 不回滚受检异常.
+如需回滚受检异常, 可直接指定:
+[source,java]
+@Transactional(rollbackFor = Throwable.class)
+
+== 日志
+=== 日志接口
+logger一律采用slf4j门面日志中的logger, 方便以后更换日志实现框架
+[source,java]
+private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Xxx.class);
+
+=== 日志级别
+* 禁止通篇log.debug级别的日志, 对于重要非异常信息, 至少info级别, 异常信息原则上error级别, 预期可处理异常信息可降级至debug或无日志.
+异常但业务可降级继续, 至少warn级别.
+* 线上日志打印级别至少info, 禁止为了能线上显示日志, 通篇log.info.
+* info及以下级别日志采用占位符或条件判断, 未加条件判断时, 禁止字符串拼接. info级别以上日志确定要输出, 直接拼接字符串, 避免占位符查找替换开销.
+[source,java]
+logger.debug("Processing trade with id: {} symbol : {} ", id, symbol);
+if (logger.isDebugEnabled()) {
+  logger.debug("Processing trade with id: " + id + " symbol: " + symbol.getMessage());
+}
+* 入参日志统一在servlet的filter中处理
+
+== 时间
+建议全面采用jdk8的日期时间类LocalDateTime, LocalDate, LocalTime.
+jackson默认时区为UTC (NOT local timezone), 在序列化带时区的日期时间(Date)时, 必须指明时区为东八区, 因此尽量避免使用jackson, 用fastjson代替
+
+== todo
+=== web-service-starter
+web-service-starter, with spring boot 2.x
+版本号如何处理, 是否加入到访问路径中, 如www.xxx.com/v1.2/..., 方便在同一台电脑上同时测试启动多个不同的后台版本进行测试, 如果加进去的话, 又怎么保证前端新旧版本同时访问后台呢
+url路径中的?xxx=yyy这些参数, 无论请求头Content-Type是多少,java servlet中都可以通过request.getParameter获取. 不清楚nginx能否根据这个进行跳转?
+对请求头Content-Type=application/json的request才打印payload日志
+
+=== extra params
+参数查询优先级: cookie, header, request param
+token, 保存用户id, 令牌及及所使用的客户端(android,ios,web), 每个用户在每个客户端上只保留最后一次登录
+ver, 客户端版本号, 后端测试发包时, 不同版本不同端口号, 由nginx根据ver进行转发
+
+=== todo list
+分布式日志系统-mdc处理
+
+=== 查看分页插件的分页参数是否用?处理

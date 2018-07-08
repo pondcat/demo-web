@@ -1,0 +1,3 @@
+=== 与数据库表一一映射的实体类
+* 必须重写toString方法
+* 必须实现TableEntity, TableCreateBy和TableUpdateBy三接口中的某一个

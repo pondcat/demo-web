@@ -1,0 +1,6 @@
+=== Service层：相对具体的业务逻辑服务层
+* 所有服务相关, 服务间可交叉调用. 交叉调用时, 避免使用构造器注入造成死循环
+* 禁止在service中调用http接口或rpc接口, 这类与第三方交互的, 一律写到manager层
+* http调用建议采用feign或retrofit, 最少也该是spring的RestTemplate
+* 请按需使用接口与实现分离的方式, 不做过度设计, 正常情况下直接class XxxService即可.
+仅在存在多种实现时, 或确有必要时, 再采用接口+实现分离的方式.
